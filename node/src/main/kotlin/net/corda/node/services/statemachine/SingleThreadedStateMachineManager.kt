@@ -212,13 +212,8 @@ class SingleThreadedStateMachineManager(
         for (pausedFlow in pausedFlows) {
             pausedFlow.value.checkpoint.checkpointState.invocationContext.clientId?.let {
                 mutex.content.clientIdsToFlowIds[it] = FlowWithClientIdStatus.Active(
-                    doneFuture(object : FlowStateMachineHandle<Any?> {
-                        override val logic: Nothing? = null
-                        override val id: StateMachineRunId = pausedFlow.key
-                        override val resultFuture: CordaFuture<Any?> = pausedFlow.value.resultFuture
-                        override val clientId: String? = it
-                    }
-                ))
+                    doneClientIdFuture(pausedFlow.key, pausedFlow.value.resultFuture, it)
+                )
             }
         }
 
@@ -301,15 +296,7 @@ class SingleThreadedStateMachineManager(
                     if (existingStatus != null) {
                         existingFuture = when (existingStatus) {
                             is FlowWithClientIdStatus.Active -> existingStatus.flowStateMachineFuture
-                            is FlowWithClientIdStatus.Removed -> {
-                                doneFuture(object : FlowStateMachineHandle<Any> {
-                                    override val logic: Nothing? = null
-                                    override val id: StateMachineRunId = existingStatus.flowId
-                                    // The following future will be populated from DB upon implementing CORDA-3692 and CORDA-3681 - for now just return a dummy future
-                                    override val resultFuture: CordaFuture<Any> = doneFuture(5)
-                                    override val clientId: String? = clientId
-                                })
-                            }
+                            is FlowWithClientIdStatus.Removed -> doneClientIdFuture(existingStatus.flowId, doneFuture(5), clientId) // This dummy future ('doneFuture(5)') will be populated from DB upon implementing CORDA-3692 and CORDA-3681 - for now just return a dummy future
                         }
                         existingStatus
                     } else {
@@ -1007,6 +994,23 @@ class SingleThreadedStateMachineManager(
             FlowWithClientIdStatus.Removed(id, nextStatus)
         }
     }
+
+    /**
+     * The flow out of which a [doneFuture] will be produced should be a started flow,
+     * i.e. it should not exist in [mutex.content.startedFutures].
+     */
+    private fun doneClientIdFuture(
+        id: StateMachineRunId,
+        resultFuture: CordaFuture<Any?>,
+        clientId: String
+    ): CordaFuture<out FlowStateMachineHandle<out Any?>> =
+        doneFuture(object : FlowStateMachineHandle<Any?> {
+            override val logic: Nothing? = null
+            override val id: StateMachineRunId = id
+            override val resultFuture: CordaFuture<Any?> = resultFuture
+            override val clientId: String? = clientId
+        }
+        )
 
     override fun removeClientId(clientId: String): Boolean {
         var removed = false
