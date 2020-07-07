@@ -112,8 +112,8 @@ class SingleThreadedStateMachineManager(
         /** Flows scheduled to be retried if not finished within the specified timeout period. */
         val timedFlows = HashMap<StateMachineRunId, ScheduledTimeout>()
 
-        // first iteration for Map<clientID, flowId> mapping (simple one, not injectable)
-        val clientIDsToFlowIds = HashMap<String, FlowWithClientIdStatus>()
+        // first iteration for Map<clientId, flowId> mapping (simple one, not injectable)
+        val clientIdsToFlowIds = HashMap<String, FlowWithClientIdStatus>()
     }
 
     private val mutex = ThreadBox(InnerState())
@@ -203,19 +203,19 @@ class SingleThreadedStateMachineManager(
 
         // at the moment we have RUNNABLE, HOSPITALIZED and PAUSED -> TODO: RESULTED AND FAILED still need to be fetched
         for (flow in fibers) {
-            flow.fiber.clientID?.let {
-                mutex.content.clientIDsToFlowIds[it] = FlowWithClientIdStatus.Active(doneFuture(flow.fiber))
+            flow.fiber.clientId?.let {
+                mutex.content.clientIdsToFlowIds[it] = FlowWithClientIdStatus.Active(doneFuture(flow.fiber))
             }
         }
 
         for (pausedFlow in pausedFlows) {
-            pausedFlow.value.checkpoint.checkpointState.invocationContext.clientID?.let {
-                mutex.content.clientIDsToFlowIds[it] = FlowWithClientIdStatus.Active(
+            pausedFlow.value.checkpoint.checkpointState.invocationContext.clientId?.let {
+                mutex.content.clientIdsToFlowIds[it] = FlowWithClientIdStatus.Active(
                     doneFuture(object : FlowStateMachineHandle<Any?> {
                         override val logic: Nothing? = null
                         override val id: StateMachineRunId = pausedFlow.key
                         override val resultFuture: CordaFuture<Any?> = pausedFlow.value.resultFuture
-                        override val clientID: String? = it
+                        override val clientId: String? = it
                     }
                 ))
             }
@@ -292,11 +292,11 @@ class SingleThreadedStateMachineManager(
 
         var newFuture: CordaFuture<out FlowStateMachineHandle<out Any?>>? = null
 
-        val clientID = context.clientID
-        if (clientID != null) {
+        val clientId = context.clientId
+        if (clientId != null) {
             var existingFuture: CordaFuture<out FlowStateMachineHandle<out Any?>>? = null
             mutex.locked {
-                clientIDsToFlowIds.compute(clientID) { _, existingStatus ->
+                clientIdsToFlowIds.compute(clientId) { _, existingStatus ->
                     if (existingStatus != null) {
                         existingFuture = when (existingStatus) {
                             is FlowWithClientIdStatus.Active -> existingStatus.flowStateMachineFuture
@@ -306,7 +306,7 @@ class SingleThreadedStateMachineManager(
                                     override val id: StateMachineRunId = existingStatus.flowId
                                     // The following future will be populated from DB upon implementing CORDA-3692 and CORDA-3681 - for now just return a dummy future
                                     override val resultFuture: CordaFuture<Any> = doneFuture(5)
-                                    override val clientID: String? = clientID
+                                    override val clientId: String? = clientId
                                 })
                             }
                         }
@@ -330,7 +330,7 @@ class SingleThreadedStateMachineManager(
             ourIdentity = ourIdentity ?: ourFirstIdentity,
             deduplicationHandler = deduplicationHandler
         ).also {
-            if (clientID != null) {
+            if (clientId != null) {
                 (newFuture as? OpenFuture<FlowStateMachine<*>>)?.captureLater(it)
                     ?: throw java.lang.IllegalStateException("Flow's $flowId client id mapping is in an inconsistent state")
             }
@@ -942,7 +942,7 @@ class SingleThreadedStateMachineManager(
         require(lastState.isRemoved) { "Flow must be in removable state before removal" }
         require(lastState.checkpoint.checkpointState.subFlowStack.size == 1) { "Checkpointed stack must be empty" }
         require(flow.fiber.id !in sessionToFlow.values) { "Flow fibre must not be needed by an existing session" }
-        flow.fiber.clientID?.let { setClientIdAsSucceeded(it, flow.fiber.id) }
+        flow.fiber.clientId?.let { setClientIdAsSucceeded(it, flow.fiber.id) }
         flow.resultFuture.set(removalReason.flowReturnValue)
         lastState.flowLogic.progressTracker?.currentStep = ProgressTracker.DONE
         changesPublisher.onNext(StateMachineManager.Change.Removed(lastState.flowLogic, Try.Success(removalReason.flowReturnValue)))
@@ -954,7 +954,7 @@ class SingleThreadedStateMachineManager(
             lastState: StateMachineState
     ) {
         drainFlowEventQueue(flow)
-        flow.fiber.clientID?.let { setClientIdAsFailed(it, flow.fiber.id) }
+        flow.fiber.clientId?.let { setClientIdAsFailed(it, flow.fiber.id) }
         val flowError = removalReason.flowErrors[0] // TODO what to do with several?
         val exception = flowError.exception
         (exception as? FlowException)?.originalErrorId = flowError.errorId
@@ -988,29 +988,29 @@ class SingleThreadedStateMachineManager(
         }
     }
 
-    private fun InnerState.setClientIdAsSucceeded(clientID: String, id: StateMachineRunId) {
-        setClientIdAsRemoved(clientID, id, FlowWithClientIdStatus.Removed.Status.SUCCEEDED)
+    private fun InnerState.setClientIdAsSucceeded(clientId: String, id: StateMachineRunId) {
+        setClientIdAsRemoved(clientId, id, FlowWithClientIdStatus.Removed.Status.SUCCEEDED)
     }
 
-    private fun InnerState.setClientIdAsFailed(clientID: String, id: StateMachineRunId) {
-        setClientIdAsRemoved(clientID, id, FlowWithClientIdStatus.Removed.Status.FAILED)
+    private fun InnerState.setClientIdAsFailed(clientId: String, id: StateMachineRunId) {
+        setClientIdAsRemoved(clientId, id, FlowWithClientIdStatus.Removed.Status.FAILED)
     }
 
     private fun InnerState.setClientIdAsRemoved(
-        clientID: String,
+        clientId: String,
         id: StateMachineRunId,
         nextStatus: FlowWithClientIdStatus.Removed.Status
     ) {
-        clientIDsToFlowIds.compute(clientID) { _, existingStatus ->
+        clientIdsToFlowIds.compute(clientId) { _, existingStatus ->
             require(existingStatus != null && existingStatus is FlowWithClientIdStatus.Active)
             FlowWithClientIdStatus.Removed(id, nextStatus)
         }
     }
 
-    override fun removeClientId(clientID: String): Boolean {
+    override fun removeClientId(clientId: String): Boolean {
         var removed = false
         mutex.locked {
-            clientIDsToFlowIds.compute(clientID) { _, existingStatus ->
+            clientIdsToFlowIds.compute(clientId) { _, existingStatus ->
                 if (existingStatus != null && existingStatus is FlowWithClientIdStatus.Removed) {
                     removed = true
                     null
